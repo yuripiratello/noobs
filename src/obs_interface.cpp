@@ -214,6 +214,16 @@ void ObsInterface::init_obs(const std::string& distPath) {
   // module load inside reset_video. See note at the top of this file.
   g_mac_graphics_module_path = basePath + "Frameworks/libobs-opengl.dylib";
   blog(LOG_INFO, "Mac graphics module path: %s", g_mac_graphics_module_path.c_str());
+
+  // obs-ffmpeg's plugin spawns the obs-ffmpeg-mux helper binary via
+  // os_get_executable_path_ptr, which returns a path next to the host
+  // process (Node/Electron) rather than next to libobs. Tell the
+  // plugin where to actually find the muxer via an env override that
+  // we patched into the obs-ffmpeg.plugin source. See
+  // ../obs-studio/plugins/obs-ffmpeg/obs-ffmpeg-mux.c.
+  std::string ffmpegMuxPath = basePath + "Frameworks/obs-ffmpeg-mux";
+  setenv("OBS_FFMPEG_MUX", ffmpegMuxPath.c_str(), 1);
+  blog(LOG_INFO, "OBS_FFMPEG_MUX override: %s", ffmpegMuxPath.c_str());
 #endif
 #ifdef _WIN32
   // Windows layout (mirrors obs-studio's Windows install):
@@ -342,7 +352,12 @@ void ObsInterface::create_output() {
   } else {
     blog(LOG_INFO, "Set ffmpeg_muxer settings");
     // Need to specify the exact path for ffmpeg_muxer. We will write this again at start recording.
-    std::string filename = recording_path + "\\" + get_current_date_time() + "." + file_extension;
+#ifdef _WIN32
+    const char path_sep = '\\';
+#else
+    const char path_sep = '/';
+#endif
+    std::string filename = recording_path + path_sep + get_current_date_time() + "." + file_extension;
     obs_data_set_string(settings, "path", filename.c_str());
     unbuffered_output_filename = filename;
   }
@@ -1219,7 +1234,12 @@ void ObsInterface::startRecording(int offset) {
     }
   } else {
     obs_data_t *ffmpeg_settings = obs_data_create();
-    std::string filename = recording_path + "\\" + get_current_date_time() + "." + file_extension;
+#ifdef _WIN32
+    const char path_sep = '\\';
+#else
+    const char path_sep = '/';
+#endif
+    std::string filename = recording_path + path_sep + get_current_date_time() + "." + file_extension;
     obs_data_set_string(ffmpeg_settings,  "path", filename.c_str());
     obs_output_update(output, ffmpeg_settings);
     obs_data_release(ffmpeg_settings);
