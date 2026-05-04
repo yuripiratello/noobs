@@ -1,4 +1,6 @@
+#ifdef _WIN32
 #include <windows.h>
+#endif
 #include <obs.h>
 #include "utils.h"
 #include "obs_interface.h"
@@ -136,7 +138,14 @@ int ObsInterface::reset_video(int fps, int width, int height) {
   ovi.scale_type = OBS_SCALE_BILINEAR;
   ovi.adapter = 0;
   ovi.gpu_conversion = true;
-  ovi.graphics_module = "libobs-d3d11.dll"; 
+#ifdef _WIN32
+  ovi.graphics_module = "libobs-d3d11.dll";
+#elif defined(__APPLE__)
+  // libobs Mac uses Metal under the hood but exposes it as the OpenGL
+  // module name (libobs-opengl.so). Confirmed by inspecting the OBS
+  // mac build.
+  ovi.graphics_module = "libobs-opengl.so";
+#endif
 
   int rc = obs_reset_video(&ovi);
 
@@ -204,28 +213,40 @@ void ObsInterface::init_obs(const std::string& distPath) {
     throw std::runtime_error("Failed to reset audio!");
   }
 
-  std::vector<std::string> modules = { 
-    "obs-x264",     // Software encoder.
-    "obs-ffmpeg",   // Contains AMF (AMD) encoder support.
-    "win-capture",  // Required for basically all forms of capture on Windows.
-    "image-source", // Required for image sources.
-    "win-wasapi",   // Required for WASAPI audio input.
-    "obs-nvenc",    // Required for NVENC video encoding.
-    "obs-qsv11",    // Required for QSV video encoding.
-    "obs-filters"   // Required for audio filters.
+  // Per-platform module list. Each entry is (name, allowFail). Modules
+  // shared across platforms (obs-x264, image-source, obs-filters,
+  // obs-ffmpeg) are listed in both blocks for clarity.
+  struct ModuleEntry { const char* name; bool allowFail; };
+#ifdef _WIN32
+  std::vector<ModuleEntry> modules = {
+    { "obs-x264",     false }, // Software encoder.
+    { "obs-ffmpeg",   false }, // Contains AMF (AMD) encoder support.
+    { "win-capture",  false }, // Required for basically all forms of capture on Windows.
+    { "image-source", false }, // Required for image sources.
+    { "win-wasapi",   false }, // Required for WASAPI audio input.
+    { "obs-nvenc",    true  }, // NVENC fails if there is no NVENC hardware support.
+    { "obs-qsv11",    false }, // Required for QSV video encoding.
+    { "obs-filters",  false }, // Required for audio filters.
   };
+  const std::string moduleExt = ".dll";
+#elif defined(__APPLE__)
+  // Phase 1 stub: empty list. Phase 2 fills in mac-capture, mac-coreaudio,
+  // obs-vt, obs-x264, obs-ffmpeg, obs-filters, image-source. Keeps the
+  // build linkable while we don't yet ship Mac plugin binaries.
+  std::vector<ModuleEntry> modules = {};
+  const std::string moduleExt = ".so";
+#endif
 
-  for (const auto& module : modules) {
-    std::string modulePath = pluginPath + module + ".dll";
-    std::string moduleDataPath = pluginDataPath + module;
-
-    // NVENC fails if there is no NVENC hardware support.
-    bool allowFail = module == "obs-nvenc";
-    load_module(modulePath.c_str(), moduleDataPath.c_str(), allowFail);
+  for (const auto& m : modules) {
+    std::string modulePath = pluginPath + m.name + moduleExt;
+    std::string moduleDataPath = pluginDataPath + m.name;
+    load_module(modulePath.c_str(), moduleDataPath.c_str(), m.allowFail);
   }
-  
+
   obs_post_load_modules();
+#ifdef _WIN32
   register_preview_window_class();
+#endif
 
   list_encoders();
   list_source_types();
@@ -765,16 +786,20 @@ void draw_callback(void* data, uint32_t cx, uint32_t cy) {
   }
 }
 
-void ObsInterface::initPreview(HWND parent) {
+#ifdef _WIN32
+void ObsInterface::initPreview(uintptr_t parentHandle) {
   blog(LOG_INFO, "ObsInterface::initPreview");
+
+  HWND parent = reinterpret_cast<HWND>(parentHandle);
+  HWND preview_hwnd = reinterpret_cast<HWND>(preview_handle);
 
   if (!preview_hwnd) {
     blog(LOG_INFO, "Creating preview child window");
 
     preview_hwnd = CreateWindowEx(
-      0,         
+      0,
       TEXT("PreviewWindowClass"),   // Window class we already registered earlier
-      TEXT("OBS Preview"),          // Window name 
+      TEXT("OBS Preview"),          // Window name
       WS_POPUP,
       0, 0,                   // Initial position (x, y)
       0, 0,                   // Initial size (width, height)
@@ -799,6 +824,8 @@ void ObsInterface::initPreview(HWND parent) {
     LONG_PTR exStyle = GetWindowLongPtr(preview_hwnd, GWL_EXSTYLE);
     exStyle |= WS_EX_TRANSPARENT;
     SetWindowLongPtr(preview_hwnd, GWL_EXSTYLE, exStyle);
+
+    preview_handle = reinterpret_cast<uintptr_t>(preview_hwnd);
   }
 
   if (!display) {
@@ -828,6 +855,8 @@ void ObsInterface::initPreview(HWND parent) {
 
 void ObsInterface::configurePreview(int x, int y, int width, int height) {
   blog(LOG_INFO, "ObsInterface::configurePreview");
+
+  HWND preview_hwnd = reinterpret_cast<HWND>(preview_handle);
 
   if (!preview_hwnd) {
     blog(LOG_ERROR, "Preview window not initialized");
@@ -862,6 +891,8 @@ void ObsInterface::configurePreview(int x, int y, int width, int height) {
 void ObsInterface::showPreview() {
   blog(LOG_INFO, "ObsInterface::showPreview");
 
+  HWND preview_hwnd = reinterpret_cast<HWND>(preview_handle);
+
   if (!preview_hwnd) {
     blog(LOG_ERROR, "Preview window not initialized");
     return;
@@ -879,11 +910,37 @@ void ObsInterface::showPreview() {
 void ObsInterface::hidePreview() {
   blog(LOG_INFO, "ObsInterface::hidePreview");
 
+  HWND preview_hwnd = reinterpret_cast<HWND>(preview_handle);
+
   if (preview_hwnd) {
     ShowWindow(preview_hwnd, SW_HIDE);
     blog(LOG_INFO, "Preview child window hidden");
   }
 }
+#elif defined(__APPLE__)
+// Phase 1 stubs. Phase 4 wires NSView + IOSurface for the real preview.
+// The native handle from JS is stored as preview_handle and will be
+// reinterpret_cast<NSView*> inside the Phase 4 implementation.
+void ObsInterface::initPreview(uintptr_t parentHandle) {
+  blog(LOG_INFO, "ObsInterface::initPreview (mac stub) parentHandle=%p",
+       reinterpret_cast<void*>(parentHandle));
+  preview_handle = parentHandle;
+}
+
+void ObsInterface::configurePreview(int x, int y, int width, int height) {
+  blog(LOG_INFO,
+       "ObsInterface::configurePreview (mac stub) x=%d y=%d w=%d h=%d",
+       x, y, width, height);
+}
+
+void ObsInterface::showPreview() {
+  blog(LOG_INFO, "ObsInterface::showPreview (mac stub)");
+}
+
+void ObsInterface::hidePreview() {
+  blog(LOG_INFO, "ObsInterface::hidePreview (mac stub)");
+}
+#endif
 
 void ObsInterface::disablePreview() {
   blog(LOG_INFO, "ObsInterface::disablePreview");

@@ -8,3 +8,10 @@ src/.cache
 src/compile_commands.json
 bin/win32-x64-116
 win-capture/
+.DS_Store
+
+# macOS port — Phase 1 spike infrastructure. Local-only symlinks
+# pointing at the OSN tarball in wow-recorder during development.
+# Phase 5 replaces this with a libobs we build ourselves and ship
+# inside Frameworks/.
+Frameworks/
