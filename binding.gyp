@@ -32,7 +32,7 @@
                 # under Frameworks/libobs.framework in this repo.
                 'libraries': [
                     '-Wl,-rpath,@loader_path/../../Frameworks',
-                    '-F<(module_root_dir)/../wow-recorder/release/app/node_modules/obs-studio-node/Frameworks',
+                    '-F<(module_root_dir)/Frameworks',
                     '-framework libobs',
                 ],
                 'xcode_settings': {

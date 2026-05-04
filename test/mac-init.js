@@ -14,44 +14,16 @@ const os = require('os');
 
 const noobs = require(path.join(__dirname, '..', 'build', 'Release', 'noobs.node'));
 
-// distPath layout we assume:
-//   <dist>/data/effects/         libobs effects (.effect files)
-//   <dist>/PlugIns/*.plugin       Mac plugin bundles
+// distPath layout we expect (vendored, all under noobs/):
+//   <dist>/Frameworks/libobs.framework         vanilla libobs from obs-studio
+//   <dist>/Frameworks/libobs-opengl.dylib       graphics module
+//   <dist>/Frameworks/lib*.dylib                ffmpeg + crypto deps
+//   <dist>/PlugIns/*.plugin                     Mac plugin bundles
+//   <dist>/data/effects/                        libobs effects (.effect files)
 //
-// OSN ships effects under data/libobs/, not data/effects/. Build a
-// staging dir that aliases the layout libobs expects.
-const osnRoot = path.resolve(
-  __dirname,
-  '..',
-  '..',
-  'wow-recorder',
-  'release',
-  'app',
-  'node_modules',
-  'obs-studio-node',
-);
-
-if (!fs.existsSync(osnRoot)) {
-  console.error('OSN root not found:', osnRoot);
-  process.exit(1);
-}
-
-const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'noobs-mac-stage-'));
-const dataDir = path.join(stage, 'data');
-fs.mkdirSync(dataDir);
-
-// Effects path: noobs adds <dist>/data/effects/. OSN's libobs/data
-// holds the .effect files at the root. Symlink so layout matches.
-fs.symlinkSync(path.join(osnRoot, 'data', 'libobs'), path.join(dataDir, 'effects'));
-
-// PlugIns: noobs reads from <dist>/PlugIns/<name>.plugin
-fs.symlinkSync(path.join(osnRoot, 'PlugIns'), path.join(stage, 'PlugIns'));
-
-// Frameworks: libobs-opengl.dylib + transitive ffmpeg/mbedtls libs.
-// libobs's @rpath was baked as @executable_path/../Frameworks which
-// resolves wrong when noobs.node loads inside Node. Symlink Frameworks/
-// into the stage dir so init_obs can hand libobs an absolute path.
-fs.symlinkSync(path.join(osnRoot, 'Frameworks'), path.join(stage, 'Frameworks'));
+// Phase 5 builds these from obsproject/obs-studio source — see plan.
+const noobsRoot = path.resolve(__dirname, '..');
+const stage = noobsRoot;
 
 const logDir = path.join(os.tmpdir(), 'noobs-mac-log');
 fs.mkdirSync(logDir, { recursive: true });

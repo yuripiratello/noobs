@@ -10,8 +10,10 @@ bin/win32-x64-116
 win-capture/
 .DS_Store
 
-# macOS port — Phase 1 spike infrastructure. Local-only symlinks
-# pointing at the OSN tarball in wow-recorder during development.
-# Phase 5 replaces this with a libobs we build ourselves and ship
-# inside Frameworks/.
+# macOS port — vendored libobs + Mac plugin bundles + libobs effect
+# data, all produced by scripts/build-libobs-mac.sh from a checkout
+# of obsproject/obs-studio. Not tracked because the binaries are
+# large + platform-specific; rebuild via the script before packaging.
 Frameworks/
+PlugIns/
+data/
