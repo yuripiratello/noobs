@@ -121,6 +121,15 @@ void ObsInterface::setVideoContext(int fps, int width, int height) {
   create_video_encoders();
 }
 
+// Mac-only. Caller's basePath gets used to compute an absolute path
+// to libobs-opengl.dylib so libobs's reset_video doesn't need to hit
+// rpath resolution (which fails when noobs.node loads from inside
+// Node — libobs's baked rpath @executable_path/../Frameworks resolves
+// against `node`, not us). Stored at init time, used by reset_video.
+#ifdef __APPLE__
+static std::string g_mac_graphics_module_path;
+#endif
+
 int ObsInterface::reset_video(int fps, int width, int height) {
   blog(LOG_INFO, "Reset video");
   obs_video_info ovi = {};
@@ -137,21 +146,35 @@ int ObsInterface::reset_video(int fps, int width, int height) {
   ovi.range = VIDEO_RANGE_PARTIAL;
   ovi.scale_type = OBS_SCALE_BILINEAR;
   ovi.adapter = 0;
+#ifdef _WIN32
   ovi.gpu_conversion = true;
+#elif defined(__APPLE__)
+  // gpu_conversion routes color format conversion through the
+  // graphics backend. On Win/D3D11 this is fine; on Mac/OpenGL it
+  // fails reset_video with INVALID_PARAM. Letting libobs do CPU
+  // conversion is the safe Phase 2 default; revisit for hardware
+  // perf later.
+  ovi.gpu_conversion = false;
+#endif
 #ifdef _WIN32
   ovi.graphics_module = "libobs-d3d11.dll";
 #elif defined(__APPLE__)
-  // libobs Mac uses Metal under the hood but exposes it as the OpenGL
-  // module name (libobs-opengl.so). Confirmed by inspecting the OBS
-  // mac build.
-  ovi.graphics_module = "libobs-opengl.so";
+  // libobs Mac ships a dylib called libobs-opengl.dylib. We hand it an
+  // absolute path computed from the consumer's distPath because
+  // libobs's own rpath (@executable_path/../Frameworks) was baked
+  // assuming a self-contained .app bundle and breaks when noobs.node
+  // is hosted by Node or Electron (whose @executable_path is wrong).
+  ovi.graphics_module = g_mac_graphics_module_path.empty()
+    ? "libobs-opengl.dylib"
+    : g_mac_graphics_module_path.c_str();
 #endif
 
   int rc = obs_reset_video(&ovi);
+  blog(LOG_INFO, "obs_reset_video rc=%d (graphics_module=%s)", rc, ovi.graphics_module);
 
   if (rc == OBS_VIDEO_SUCCESS) {
     // Without this HDR doesn't work.
-    obs_set_video_levels(300.0f, 1000.0f); 
+    obs_set_video_levels(300.0f, 1000.0f);
   }
 
   return rc;
@@ -186,8 +209,28 @@ void ObsInterface::init_obs(const std::string& distPath) {
   }
 
   std::string effectsPath = basePath + "data/effects/";
+#ifdef __APPLE__
+  // Resolved absolute path to libobs-opengl.dylib for the graphics
+  // module load inside reset_video. See note at the top of this file.
+  g_mac_graphics_module_path = basePath + "Frameworks/libobs-opengl.dylib";
+  blog(LOG_INFO, "Mac graphics module path: %s", g_mac_graphics_module_path.c_str());
+#endif
+#ifdef _WIN32
+  // Windows layout (mirrors obs-studio's Windows install):
+  //   <dist>/obs-plugins/<name>.dll
+  //   <dist>/data/obs-plugins/<name>/
   std::string pluginPath = basePath + "obs-plugins/";
   std::string pluginDataPath = basePath + "data/obs-plugins/";
+#elif defined(__APPLE__)
+  // Mac layout (mirrors the .plugin bundle convention used by OBS-Mac
+  // and the Streamlabs OSN tarball):
+  //   <dist>/PlugIns/<name>.plugin/Contents/MacOS/<name>     (binary)
+  //   <dist>/PlugIns/<name>.plugin/Contents/Resources/        (data)
+  // Mac module path = bundle binary path; libobs's bundle loader
+  // figures out Resources/ from there.
+  std::string pluginPath = basePath + "PlugIns/";
+  std::string pluginDataPath = basePath + "PlugIns/"; // unused on Mac, kept for parity
+#endif
 
   blog(LOG_INFO, "Base path: %s", basePath.c_str());
   blog(LOG_INFO, "Effects path: %s", effectsPath.c_str());
@@ -230,16 +273,28 @@ void ObsInterface::init_obs(const std::string& distPath) {
   };
   const std::string moduleExt = ".dll";
 #elif defined(__APPLE__)
-  // Phase 1 stub: empty list. Phase 2 fills in mac-capture, mac-coreaudio,
-  // obs-vt, obs-x264, obs-ffmpeg, obs-filters, image-source. Keeps the
-  // build linkable while we don't yet ship Mac plugin binaries.
-  std::vector<ModuleEntry> modules = {};
-  const std::string moduleExt = ".so";
+  std::vector<ModuleEntry> modules = {
+    { "obs-x264",         false }, // Software H.264 encoder fallback.
+    { "obs-ffmpeg",       false }, // ffmpeg_muxer output, AAC encoder.
+    { "mac-capture",      false }, // screen_capture + coreaudio_input/output_capture sources.
+    { "image-source",     false }, // Required for image sources (chat overlay).
+    { "mac-videotoolbox", false }, // VT_H264 + VT_HEVC hardware encoders.
+    { "obs-filters",      false }, // Audio filters.
+  };
 #endif
 
   for (const auto& m : modules) {
-    std::string modulePath = pluginPath + m.name + moduleExt;
+#ifdef _WIN32
+    std::string modulePath = pluginPath + m.name + ".dll";
     std::string moduleDataPath = pluginDataPath + m.name;
+#elif defined(__APPLE__)
+    // <dist>/PlugIns/<name>.plugin/Contents/MacOS/<name>
+    std::string modulePath =
+      pluginPath + m.name + ".plugin/Contents/MacOS/" + m.name;
+    // <dist>/PlugIns/<name>.plugin/Contents/Resources
+    std::string moduleDataPath =
+      pluginPath + m.name + ".plugin/Contents/Resources";
+#endif
     load_module(modulePath.c_str(), moduleDataPath.c_str(), m.allowFail);
   }
 
