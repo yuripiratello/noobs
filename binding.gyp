@@ -23,17 +23,22 @@
                 ],
             }],
             ['OS=="mac"', {
-                # Phase 1 of macOS port: link against libobs.framework.
-                # Source: Streamlabs OSN tarball during the spike, which
-                # ships an arm64 libobs.framework next to its own client
-                # binding. Path resolved at gyp time; expects an OSN
-                # checkout sibling to this noobs repo (../obs-studio-node).
-                # Phase 5 replaces this with a libobs we build ourselves
-                # under Frameworks/libobs.framework in this repo.
+                'sources': [
+                    # ObjC++ implementation of the preview NSView path.
+                    # The C++ in obs_interface.cpp guards its preview
+                    # functions behind _WIN32 so the Mac translation
+                    # unit owns those symbols.
+                    'src/obs_interface_mac.mm',
+                ],
                 'libraries': [
+                    # Vendored libobs (Phase 5) lives at
+                    # noobs/Frameworks/libobs.framework. rpath resolves
+                    # at runtime relative to the consumer's bundled
+                    # noobs.node location.
                     '-Wl,-rpath,@loader_path/../../Frameworks',
                     '-F<(module_root_dir)/Frameworks',
                     '-framework libobs',
+                    '-framework Cocoa',
                 ],
                 'xcode_settings': {
                     'CLANG_CXX_LANGUAGE_STANDARD': 'c++17',
@@ -45,6 +50,9 @@
                     # via Xcode defaults, which would fail to compile. Re-enable
                     # exceptions for our build.
                     'GCC_ENABLE_CPP_EXCEPTIONS': 'YES',
+                    # ObjC++ default ARC for the .mm — easier memory
+                    # management around NSView retain/release.
+                    'CLANG_ENABLE_OBJC_ARC': 'YES',
                     'OTHER_CPLUSPLUSFLAGS': [
                         '-Wno-deprecated-declarations',
                     ],

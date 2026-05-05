@@ -987,30 +987,10 @@ void ObsInterface::hidePreview() {
     blog(LOG_INFO, "Preview child window hidden");
   }
 }
-#elif defined(__APPLE__)
-// Phase 1 stubs. Phase 4 wires NSView + IOSurface for the real preview.
-// The native handle from JS is stored as preview_handle and will be
-// reinterpret_cast<NSView*> inside the Phase 4 implementation.
-void ObsInterface::initPreview(uintptr_t parentHandle) {
-  blog(LOG_INFO, "ObsInterface::initPreview (mac stub) parentHandle=%p",
-       reinterpret_cast<void*>(parentHandle));
-  preview_handle = parentHandle;
-}
-
-void ObsInterface::configurePreview(int x, int y, int width, int height) {
-  blog(LOG_INFO,
-       "ObsInterface::configurePreview (mac stub) x=%d y=%d w=%d h=%d",
-       x, y, width, height);
-}
-
-void ObsInterface::showPreview() {
-  blog(LOG_INFO, "ObsInterface::showPreview (mac stub)");
-}
-
-void ObsInterface::hidePreview() {
-  blog(LOG_INFO, "ObsInterface::hidePreview (mac stub)");
-}
 #endif
+// macOS implementations of the four preview functions live in
+// src/obs_interface_mac.mm. The .mm split keeps Cocoa imports out
+// of the Win32 / cross-platform translation unit.
 
 void ObsInterface::disablePreview() {
   blog(LOG_INFO, "ObsInterface::disablePreview");
