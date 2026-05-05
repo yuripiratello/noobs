@@ -66,10 +66,90 @@ if (process.platform === 'win32') {
     filter: (src) => !src.endsWith('.pdb') // Exclude PDB files, they are debug files and they are huge.
   });
 } else if (process.platform === 'darwin') {
-  // Phase 1 stub: ship just the compiled .node. Phase 2 + 5 will copy
-  // libobs.framework, mac obs-plugins (.so), and runtime data once
-  // those are wired up.
-  console.log('[dist] macOS: Phase 1 stub — only .node bundled');
+  // Mac dist layout (Phase 5 / 6 of the macOS port):
+  //   dist/noobs.node                  the native addon
+  //   dist/Frameworks/*                libobs.framework + dylibs +
+  //                                    obs-ffmpeg-mux helper
+  //   dist/PlugIns/*.plugin            Mac plugin bundles
+  //   dist/data/effects/*              libobs effect files
+  //
+  // The consuming app (wow-recorder) passes <dist> to noobs.Init as
+  // `distPath`; init_obs reads PlugIns/, data/effects/, and
+  // Frameworks/ from there, and obs_interface_mac.mm hands the
+  // contentView to obs_display_create.
+  const macSources = [
+    { name: 'Frameworks', src: path.resolve(__dirname, 'Frameworks') },
+    { name: 'PlugIns',   src: path.resolve(__dirname, 'PlugIns')   },
+    { name: 'data',      src: path.resolve(__dirname, 'data')      },
+  ];
+  // fs.cpSync rewrites symlink targets to absolute paths in older
+  // node versions. The libobs.framework needs its symlinks to stay
+  // RELATIVE (`Versions/Current/libobs`, etc.) for both the canonical
+  // bundle layout and so consumers like electron-builder can copy the
+  // result without ENOENT errors. Shell out to `cp -R` which
+  // preserves symlinks verbatim.
+  const { execFileSync } = require('child_process');
+  for (const { name, src } of macSources) {
+    if (!fs.existsSync(src)) {
+      console.warn(`[dist] missing ${name}/ — run scripts/build-libobs-mac.sh first`);
+      continue;
+    }
+    const dst = path.join(distRoot, name);
+    execFileSync('cp', ['-R', src, dst], { stdio: 'inherit' });
+    console.log(`[dist] copied ${name}/ → dist/${name}/`);
+  }
+
+  // libobs.framework was baked with rpath @executable_path/../Frameworks
+  // on the OBS build assumption that it lives inside a self-contained
+  // .app bundle. Embedded in noobs/dist/Frameworks the consumer's
+  // executable is Node or Electron (wrong location). Add @loader_path/.
+  // so libobs's own dlopen calls (libavcodec, libavformat, etc.) find
+  // the sibling dylibs we ship next to it.
+  const libobs = path.join(distRoot, 'Frameworks', 'libobs.framework', 'Versions', 'A', 'libobs');
+  if (fs.existsSync(libobs)) {
+    // libobs lives at dist/Frameworks/libobs.framework/Versions/A/.
+    // Its dlopens of @rpath/lib*.dylib (libavcodec, libavformat, etc.)
+    // need to resolve to dist/Frameworks/, three levels up from
+    // libobs's own @loader_path. Add that rpath explicitly so libobs
+    // doesn't rely on the broken @executable_path/../Frameworks rpath
+    // it was originally baked with.
+    try {
+      execFileSync('install_name_tool', ['-add_rpath', '@loader_path/../../..', libobs], { stdio: 'inherit' });
+      console.log('[dist] patched libobs rpath to @loader_path/../../..');
+    } catch (err) {
+      console.warn('[dist] install_name_tool failed (already patched?):', err.message);
+    }
+  }
+
+  // Flatten libobs.framework: remove the convenience symlinks
+  // (libobs/Headers/Resources at root, Versions/Current → A) and
+  // leave only the real Versions/A/* tree. Required because
+  // electron-builder's recursive copier walks targets alphabetically
+  // and ensureSymlink calls on `Versions/Current/...` references
+  // fail with ENOENT during the copy. libobs's install_name embeds
+  // `@rpath/libobs.framework/Versions/A/libobs` directly, so the
+  // canonical .framework symlink layout is unnecessary at runtime —
+  // it's only useful at LINK time (-framework libobs).
+  const fwRoot = path.join(distRoot, 'Frameworks', 'libobs.framework');
+  if (fs.existsSync(fwRoot)) {
+    for (const link of ['Headers', 'libobs', 'Resources']) {
+      const p = path.join(fwRoot, link);
+      try {
+        const st = fs.lstatSync(p);
+        if (st.isSymbolicLink()) {
+          fs.unlinkSync(p);
+        }
+      } catch { /* not present, fine */ }
+    }
+    const currentLink = path.join(fwRoot, 'Versions', 'Current');
+    try {
+      const st = fs.lstatSync(currentLink);
+      if (st.isSymbolicLink()) {
+        fs.unlinkSync(currentLink);
+        console.log('[dist] stripped libobs.framework/Versions/Current symlink');
+      }
+    } catch { /* not present, fine */ }
+  }
 } else {
   console.warn('[dist] platform not supported:', process.platform);
 }

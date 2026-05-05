@@ -32,10 +32,13 @@
                 ],
                 'libraries': [
                     # Vendored libobs (Phase 5) lives at
-                    # noobs/Frameworks/libobs.framework. rpath resolves
-                    # at runtime relative to the consumer's bundled
-                    # noobs.node location.
+                    # noobs/Frameworks/libobs.framework at build time
+                    # and at dist/Frameworks/libobs.framework after
+                    # dist.js. Both rpaths cover the two layouts:
+                    #   build/Release/noobs.node → ../../Frameworks
+                    #   dist/noobs.node          → Frameworks
                     '-Wl,-rpath,@loader_path/../../Frameworks',
+                    '-Wl,-rpath,@loader_path/Frameworks',
                     '-F<(module_root_dir)/Frameworks',
                     '-framework libobs',
                     '-framework Cocoa',
