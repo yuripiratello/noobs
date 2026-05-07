@@ -146,16 +146,13 @@ int ObsInterface::reset_video(int fps, int width, int height) {
   ovi.range = VIDEO_RANGE_PARTIAL;
   ovi.scale_type = OBS_SCALE_BILINEAR;
   ovi.adapter = 0;
-#ifdef _WIN32
+  // gpu_conversion routes BGRA→NV12 through the graphics backend.
+  // CPU fallback (false) on libobs-opengl Mac produces all-green
+  // frames — the CPU NV12 packing path is rotted vs the GPU shader
+  // path that OBS actually uses. Vanilla libobs handles the GPU
+  // path fine on both Win/D3D11 and Mac/OpenGL once reset_video
+  // succeeds, which it does in our Phase 5 build.
   ovi.gpu_conversion = true;
-#elif defined(__APPLE__)
-  // gpu_conversion routes color format conversion through the
-  // graphics backend. On Win/D3D11 this is fine; on Mac/OpenGL it
-  // fails reset_video with INVALID_PARAM. Letting libobs do CPU
-  // conversion is the safe Phase 2 default; revisit for hardware
-  // perf later.
-  ovi.gpu_conversion = false;
-#endif
 #ifdef _WIN32
   ovi.graphics_module = "libobs-d3d11.dll";
 #elif defined(__APPLE__)
@@ -992,6 +989,7 @@ void ObsInterface::hidePreview() {
 // src/obs_interface_mac.mm. The .mm split keeps Cocoa imports out
 // of the Win32 / cross-platform translation unit.
 
+#ifndef __APPLE__
 void ObsInterface::disablePreview() {
   blog(LOG_INFO, "ObsInterface::disablePreview");
 
@@ -1003,6 +1001,7 @@ void ObsInterface::disablePreview() {
   hidePreview();
   obs_display_set_enabled(display, false);
 }
+#endif
 
 PreviewInfo ObsInterface::getPreviewInfo() {
   if (!display) {
@@ -1015,6 +1014,16 @@ PreviewInfo ObsInterface::getPreviewInfo() {
 
   uint32_t width, height;
 	obs_display_size(display, &width, &height);
+
+#ifdef __APPLE__
+  // obs_display is sized in backing pixels on Mac (see
+  // configurePreview). Renderer math expects CSS points/pixels —
+  // divide back out by the cached backingScaleFactor.
+  if (preview_backing_scale > 0.0) {
+    width = static_cast<uint32_t>(width / preview_backing_scale);
+    height = static_cast<uint32_t>(height / preview_backing_scale);
+  }
+#endif
 
   PreviewInfo info = {
     ovi.base_width,
@@ -1032,6 +1041,30 @@ void ObsInterface::setDrawSourceOutline(bool enabled) {
 
 bool ObsInterface::getDrawSourceOutlineEnabled() {
   return drawSourceOutline;
+}
+
+namespace {
+struct ListSceneItemsCtx {
+  std::vector<std::string> *out;
+};
+
+bool collect_scene_item_name(obs_scene_t* /*scene*/, obs_sceneitem_t *item, void *param) {
+  auto *ctx = static_cast<ListSceneItemsCtx *>(param);
+  obs_source_t *src = obs_sceneitem_get_source(item);
+  if (src) {
+    const char *name = obs_source_get_name(src);
+    if (name) ctx->out->emplace_back(name);
+  }
+  return true; // keep enumerating
+}
+} // namespace
+
+std::vector<std::string> ObsInterface::listSceneItems() {
+  std::vector<std::string> names;
+  if (!scene) return names;
+  ListSceneItemsCtx ctx{ &names };
+  obs_scene_enum_items(scene, collect_scene_item_name, &ctx);
+  return names;
 }
 
 ObsInterface::ObsInterface(
@@ -1067,20 +1100,22 @@ ObsInterface::ObsInterface(
 ObsInterface::~ObsInterface() {
   blog(LOG_DEBUG, "Shutting down");
 
+  // Don't erase while iterating — invalidates the range-for
+  // iterator on macOS libc++ and segfaults under PAC. Free
+  // resources, then clear() once.
   for (auto& kv : volmeters) {
     obs_volmeter_t* volmeter = kv.second;
     obs_volmeter_remove_callback(volmeter, volmeter_callback, this);
     obs_volmeter_detach_source(volmeter);
     obs_volmeter_destroy(volmeter);
     blog(LOG_INFO, "Volmeter deleted for source: %s", kv.first.c_str());
-    volmeters.erase(kv.first);
   }
+  volmeters.clear();
 
   for (auto& kv : volmeter_cb_ctx) {
-    SignalContext* ctx = kv.second;
-    delete ctx;
-    volmeter_cb_ctx.erase(kv.first);
+    delete kv.second;
   }
+  volmeter_cb_ctx.clear();
 
   delete starting_ctx;
   delete start_ctx;
@@ -1089,24 +1124,26 @@ ObsInterface::~ObsInterface() {
   delete activate_ctx;
   delete deactivate_ctx;
 
+  // Free + clear without erase-during-iter. Same UB as the volmeter
+  // bug — libc++ range-for invalidates the iterator after erase and
+  // the next dereference faults under PAC.
   for (auto& kv : sources) {
-    std::string name = kv.first;
+    const std::string &name = kv.first;
     obs_source_t* source = kv.second;
 
     auto filter_it = filters.find(name);
-
     if (filter_it != filters.end()) {
       obs_source_t* filter = filter_it->second;
       obs_source_filter_remove(source, filter);
       obs_source_release(filter);
-      filters.erase(name);
       blog(LOG_INFO, "Filter removed for source: %s on shutdown", name.c_str());
     }
 
     blog(LOG_DEBUG, "Releasing source: %s", name.c_str());
     obs_source_release(source);
-    sources.erase(name);
   }
+  filters.clear();
+  sources.clear();
 
   if (scene) {
     blog(LOG_DEBUG, "Releasing scene");

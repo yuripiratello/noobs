@@ -105,6 +105,29 @@ if (process.platform === 'win32') {
   // executable is Node or Electron (wrong location). Add @loader_path/.
   // so libobs's own dlopen calls (libavcodec, libavformat, etc.) find
   // the sibling dylibs we ship next to it.
+  // Same rpath story for each plugin bundle. Plugin binaries live at
+  //   dist/PlugIns/<name>.plugin/Contents/MacOS/<name>
+  // Their @rpath/lib*.dylib lookups (libavcodec, libavdevice, ...)
+  // need to find dist/Frameworks/, four levels up from their own
+  // @loader_path. Without this they fall through to libobs's rpath
+  // which points at libobs.framework/Versions/A/ — only libobs.dylib
+  // is found there, sibling lookups fail.
+  const pluginsDir = path.join(distRoot, 'PlugIns');
+  if (fs.existsSync(pluginsDir)) {
+    for (const entry of fs.readdirSync(pluginsDir)) {
+      if (!entry.endsWith('.plugin')) continue;
+      const name = entry.replace(/\.plugin$/, '');
+      const bin = path.join(pluginsDir, entry, 'Contents', 'MacOS', name);
+      if (!fs.existsSync(bin)) continue;
+      try {
+        execFileSync('install_name_tool', ['-add_rpath', '@loader_path/../../../../Frameworks', bin], { stdio: 'inherit' });
+        console.log(`[dist] patched ${name} plugin rpath`);
+      } catch (err) {
+        console.warn(`[dist] install_name_tool on ${name} failed:`, err.message);
+      }
+    }
+  }
+
   const libobs = path.join(distRoot, 'Frameworks', 'libobs.framework', 'Versions', 'A', 'libobs');
   if (fs.existsSync(libobs)) {
     // libobs lives at dist/Frameworks/libobs.framework/Versions/A/.

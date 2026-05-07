@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <map>
 #include <string>
+#include <vector>
 #include <optional>
 
 // Per-platform source type ids. Windows uses WASAPI, macOS uses
@@ -90,6 +91,7 @@ class ObsInterface {
     // initPreview takes a native window handle as an opaque uintptr_t so
     // the same signature works on Win32 (HWND) and macOS (NSView*).
     // Implementation lives in platform-specific .cpp blocks.
+    std::vector<std::string> listSceneItems(); // Names of all scene items in z-order (bottom→top).
     void initPreview(uintptr_t parentHandle); // Must call this before showPreview to setup resources.
     void configurePreview(int x, int y, int width, int height); // Move and resize the preview display.
     void showPreview(); // Show the preview display.
@@ -124,6 +126,14 @@ class ObsInterface {
     // macOS — stored as uintptr_t and reinterpreted by platform-
     // specific code paths.
     uintptr_t preview_handle = 0;
+    // Mac NSView backingScaleFactor cached at configurePreview. obs_display
+    // is sized in backing pixels but the renderer talks CSS px / points;
+    // getPreviewInfo divides by this to undo the multiply. 1.0 on Win.
+    double preview_backing_scale = 1.0;
+    // Mac child NSWindow holding the canvas view, parented to the
+    // BrowserWindow's NSWindow. Stored as opaque ptr so the header
+    // stays free of Cocoa types. Unused on Win.
+    uintptr_t preview_child_window = 0;
     Napi::ThreadSafeFunction jscb; // javascript callback
     std::string recording_path = ""; 
     std::string unbuffered_output_filename = "";

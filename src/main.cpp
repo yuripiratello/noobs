@@ -92,6 +92,20 @@ Napi::Value ObsResetVideoContext(const Napi::CallbackInfo& info) {
   return info.Env().Undefined();
 }
 
+Napi::Value ObsListSceneItems(const Napi::CallbackInfo& info) {
+  if (!obs) {
+    blog(LOG_ERROR, "ObsListSceneItems called but obs is not initialized");
+    Napi::Error::New(info.Env(), "Obs not initialized").ThrowAsJavaScriptException();
+    return info.Env().Undefined();
+  }
+  auto names = obs->listSceneItems();
+  Napi::Array result = Napi::Array::New(info.Env(), names.size());
+  for (size_t i = 0; i < names.size(); ++i) {
+    result[i] = Napi::String::New(info.Env(), names[i]);
+  }
+  return result;
+}
+
 Napi::Value ObsListVideoEncoders(const Napi::CallbackInfo& info) {
   if (!obs) {
     blog(LOG_ERROR, "ObsListVideoEncoders called but obs is not initialized");
@@ -686,6 +700,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("SetRecordingCfg", Napi::Function::New(env, ObsSetRecordingCfg));
   exports.Set("ResetVideoContext", Napi::Function::New(env, ObsResetVideoContext));
   exports.Set("ListVideoEncoders", Napi::Function::New(env, ObsListVideoEncoders));
+  exports.Set("ListSceneItems", Napi::Function::New(env, ObsListSceneItems));
   exports.Set("SetVideoEncoder", Napi::Function::New(env, ObsSetVideoEncoder));
 
   exports.Set("SetBuffering", Napi::Function::New(env, ObsSetBuffering));
