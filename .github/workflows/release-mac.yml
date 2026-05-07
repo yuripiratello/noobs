@@ -1,11 +1,16 @@
 name: release-mac
 on:
   push:
-    branches: [feat/macos-port]
     tags: ['v*-mac', 'v*']
   pull_request:
     branches: [feat/macos-port, main]
   workflow_dispatch:
+
+# Cancel in-flight runs of the same workflow for the same ref so
+# accidental dupes don't burn runner minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
