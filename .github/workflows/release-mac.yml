@@ -26,11 +26,22 @@ jobs:
             vendor/obs-studio
           key: obs-studio-${{ hashFiles('scripts/build-libobs-mac.sh') }}
 
-      # OBS 31.0.3's cmake/macos/compilerconfig.cmake regex parses the
-      # SDK plist in a format that broke in Xcode 15.4. Pin to 15.2 —
-      # matches what OBS shipped 31.0.3 against.
-      - name: select Xcode 15.2
-        run: sudo xcode-select -s /Applications/Xcode_15.2.app
+      # OBS 31.0.3's cmake/macos/compilerconfig.cmake requires the
+      # versioned SDK path (`MacOSX14.2.sdk`) — its regex won't match
+      # the default `MacOSX.sdk` symlink. Pin Xcode 15.2 + export
+      # SDKROOT to the versioned path so CMake's auto-detection picks
+      # it up.
+      - name: select Xcode 15.2 + versioned SDK
+        run: |
+          sudo xcode-select -s /Applications/Xcode_15.2.app
+          SDK_PATH="/Applications/Xcode_15.2.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX14.2.sdk"
+          if [ ! -d "$SDK_PATH" ]; then
+            echo "Versioned SDK not found at $SDK_PATH; available:"
+            ls /Applications/Xcode_15.2.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/
+            exit 1
+          fi
+          echo "SDKROOT=$SDK_PATH" >> $GITHUB_ENV
+          echo "CMAKE_OSX_SYSROOT=$SDK_PATH" >> $GITHUB_ENV
 
       - name: install build deps
         run: |
